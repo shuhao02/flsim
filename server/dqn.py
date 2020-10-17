@@ -10,7 +10,7 @@ from threading import Thread
 from utils.kcenter import GreedyKCenter  # pylint: disable=no-name-in-module
 
 # 超参数
-BATCH_SIZE = 32
+BATCH_SIZE = 2
 LR = 0.1                   # learning rate
 EPSILON = 0.8               # 最优选择动作百分比
 GAMMA = 0.9                 # 奖励递减参数
@@ -47,12 +47,15 @@ class DQN(object):
         # 这里只输入一个 sample
         if np.random.uniform() < EPSILON:   # 选最优动作
             actions_value = self.eval_net.forward(x)
+            _, indices = actions_value.sort(descending = True)
+            actions = indices[0][:10].tolist()       #选取最优的10个动作
             print(actions_value)
-            action = torch.max(actions_value, 1)[1].data.numpy()[0]    # return the argmax
-        else:   # 选随机动作
-            action = np.random.randint(0, N_ACTIONS)
-        print("做出选择，选择:",action)
-        return action
+            # action = torch.max(actions_value, 1)[1].data.numpy()[0]    # return the argmax
+        else:   # 选随机s动作
+            # action = np.random.randint(0, N_ACTIONS)
+            actions = [np.random.randint(0, N_ACTIONS) for i in range(10)]
+        print("做出选择，选择:",actions)
+        return actions
 
     def store_transition(self, s, a, r, s_):
         transition = np.hstack((s, [a, r], s_))
@@ -91,9 +94,6 @@ class DQN(object):
 
 class DQNServer(Server):
     """Federated learning server that performs dqn profiling during selection."""
-
-    def __init__(self, config):
-        self.config = config
         
     # Run federated learning
     def run(self):
@@ -112,7 +112,10 @@ class DQNServer(Server):
 
         # Select clients to participate in the round
         sample_client_index = self.selection()
-        sample_client = [client for client, _ in [self.global_weights[sample_client_index]]]
+        sample_client = [client for client, _ in [self.global_weights[i] for i in sample_client_index]]
+
+        # 选取一个
+        # sample_client = [client for client, _ in [self.global_weights[sample_client_index]]]
 
         #获取当前状态
         s = trans_torch([weight for _, weight in self.global_weights]).reshape(-1)
@@ -142,7 +145,8 @@ class DQNServer(Server):
         fl_model.load_weights(self.model, updated_weights)
 
         #更新report_weight到global_weight,(转updated_weight为一维)
-        self.global_weights[sample_client_index] = (sample_client[0],self.flatten_weights(reports[0].weights))
+        for i in range(len(sample_client_index)):
+            self.global_weights[sample_client_index[i]] = (sample_client[i],self.flatten_weights(reports[i].weights))
 
         # Extract flattened weights (if applicable)
         if self.config.paths.reports:
@@ -168,7 +172,10 @@ class DQNServer(Server):
         #这里的2可以修改，作为一个参数
         r = (pow(2,(accuracy-self.config.fl.target_accuracy)) - 1 ) * 10
         print("reward:",r)
-        self.dqn.store_transition(s, sample_client_index, r, s_)
+        for i in sample_client_index:
+            self.dqn.store_transition(s, i, r, s_)
+        # 只选取一个
+        # self.dqn.store_transition(s, sample_client_index, r, s_)
         if self.dqn.memory_counter > MEMORY_CAPACITY:
             self.dqn.learn() # 记忆库满了就进行学习
         s = s_
